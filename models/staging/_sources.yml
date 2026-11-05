@@ -1,0 +1,22 @@
+version: 2
+
+sources:
+  # Source system 1: generated data (scripts/generate_data.py)
+  - name: raw
+    description: Synthetic shop data, four CSVs.
+    meta:
+      external_location: "data/raw/{name}.csv"
+    tables:
+      - name: customers
+      - name: orders
+      - name: order_items
+      - name: refunds
+
+  # Source system 2: real data (UCI / Kaggle "Online Retail II"),
+  # standardised by scripts/prepare_online_retail.py
+  - name: online_retail_ii
+    description: One flat table of invoice lines from a real UK online retailer.
+    meta:
+      external_location: "data/raw/online_retail_ii.csv"
+    tables:
+      - name: transactions

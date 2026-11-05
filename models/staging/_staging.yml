@@ -1,0 +1,43 @@
+version: 2
+
+models:
+  - name: stg_orders
+    description: Deduplicated orders (retries removed).
+    columns:
+      - name: order_id
+        tests: [unique, not_null]
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['completed', 'cancelled', 'pending', 'test']
+      - name: currency
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['GBP', 'EUR', 'USD']
+          - relationships:
+              arguments:
+                to: ref('fx_rates')
+                field: currency
+
+  - name: stg_refunds
+    columns:
+      - name: refund_id
+        tests: [unique, not_null]
+      - name: order_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id
+
+  - name: stg_order_items
+    columns:
+      - name: order_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id

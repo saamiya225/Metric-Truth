@@ -1,0 +1,32 @@
+version: 2
+
+models:
+  - name: dim_customers
+    columns:
+      - name: customer_id
+        tests: [unique, not_null]
+      - name: is_internal
+        tests: [not_null]
+
+  - name: fct_orders
+    description: One row per revenue-eligible order. The governed definition.
+    columns:
+      - name: order_id
+        tests: [unique, not_null]
+      - name: customer_id
+        description: Null for guest orders (real data has many).
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_customers')
+                field: customer_id
+      - name: net_revenue_gbp
+        tests:
+          - not_null
+          - dbt_utils_free_non_negative
+
+  - name: fct_daily_revenue
+    description: The single source of truth for daily revenue metrics.
+    columns:
+      - name: order_date
+        tests: [unique, not_null]

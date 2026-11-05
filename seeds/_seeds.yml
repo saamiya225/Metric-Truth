@@ -1,0 +1,8 @@
+version: 2
+seeds:
+  - name: fx_rates
+    columns:
+      - name: currency
+        tests: [unique, not_null]
+      - name: rate_to_gbp
+        tests: [not_null]

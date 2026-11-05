@@ -1,0 +1,19 @@
+name: metric_truth
+version: "1.0.0"
+config-version: 2
+profile: metric_truth
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+analysis-paths: ["analyses"]
+macro-paths: ["macros"]
+
+models:
+  metric_truth:
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table
