@@ -95,6 +95,16 @@ It ends exactly on the figure in the warehouse.
   £0.82M of charges and £0.75M of credits, which net to about £77K. Excluding them
   from both sides is consistent, but I haven't yet looked at what they actually are.
 
+### What the Governed Figure Means
+
+The first two totals are wrong in principle, not just different. Ignoring returns counts
+money that went back to customers as revenue. Adding every row counts postage, fees and
+write-offs as sales, and its total only looks reasonable because those errors partly
+cancel. The governed figure is the one I can defend line by line, but I'd describe it as
+net product sales under the rules below, not as the retailer's true revenue. "Revenue" can
+mean net product sales, accounting revenue or cash received, and these are different
+numbers, which is why I wrote the definition down.
+
 ## Business Rules and Assumptions
 
 These are my rules, not facts from the dataset. The full list is in
@@ -110,11 +120,18 @@ These are my rules, not facts from the dataset. The full list is in
 
 ## Open Questions
 
-I treated the duplicates as errors on the strength of the dataset notes, not from checking
-them. If they're genuine repeat scans, revenue is about £0.43M (2.3%) higher. I also
-haven't broken the non-product lines down by stock code, so if some of them are customer
-discounts, excluding them overstates revenue. The reconciliation shows the code follows
-my rules. It doesn't show the rules are right.
+The governed figure depends on four assumptions that I took from the dataset documentation
+and haven't yet checked against the data. The reconciliation shows the code follows these
+rules, not that they're right.
+
+| Assumption | If it's wrong |
+|---|---|
+| Exact duplicate lines are errors | If they're genuine repeat scans, revenue is about £0.43M (2.3%) higher |
+| Non-product lines (postage, manual entries, fees) aren't revenue | If some are customer discounts, excluding them overstates revenue. I haven't broken them down by stock code yet, so the effect is unknown |
+| Every invoice is a completed sale | The data has no status column, so some invoices may be cancelled orders. Effect unknown |
+| Credit notes reduce revenue on the day they're issued | The data doesn't link them to original invoices, so the timing could differ from the retailer's own accounting. Effect unknown |
+
+The next step is to measure how sensitive the total is to each one.
 
 ## Testing and Validation
 
