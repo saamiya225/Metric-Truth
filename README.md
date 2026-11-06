@@ -1,183 +1,174 @@
-# metric-truth: one tested definition of "revenue"
+# metric-truth
 
-A dbt + DuckDB project that turns messy retail transaction data into trustworthy
-revenue metrics, using one written set of business rules that is enforced by
-automated tests.
+## Overview
 
-It runs on **two data sources** and produces identical tables from either:
+A dbt and DuckDB project that answers a deceptively simple question: how much did a
+retailer actually sell?
 
-| Source | What it is | Used for |
-|---|---|---|
-| `online_retail_ii` | Real invoice lines from a UK online retailer (1,067,371 rows, Dec 2009 to Dec 2011) | The main analysis |
-| `synthetic` | Generated shop data with known, planted flaws | Demos, tests and CI |
+I built it around a real dataset of retail transactions, and the answer turned out to
+depend on a handful of decisions that are easy to get wrong and easy to hide. The
+project writes those decisions down once, applies them the same way every time, and
+checks the result with automated tests.
 
-## The problem
+## Problem Statement
 
-Raw transaction data cannot simply be summed into "revenue". In the real dataset,
-the same table mixes genuine sales with:
+Raw transaction data can't just be added up. The file I used mixes genuine sales with
+returns stored as negative lines, postage and fees, accounting write-offs and
+duplicated lines. Anyone who totals it without deciding how to treat each of those
+gets a different number, and two people can both believe theirs is right.
 
-- **Returns**, stored as negative lines (19,494 credit-note rows)
-- **Postage and fees**, and accounting adjustments that are not product sales
-- **Duplicated lines**
-- **Orders with no customer ID** (22.8% of rows)
-
-Unless the rule for each of these is written down and enforced, anyone totalling
-the data gets a different answer.
-
-## Hypothesis
-
-If the rules live in one tested layer, then:
-
-1. every report can read one table (`fct_daily_revenue`) and reconcile to it,
-2. naive totals differ materially from the governed figure, and
-3. data problems fail a test before they reach a dashboard.
+My goal was a single place where those rules live, so that every report reads from the
+same table and a change to a rule is a one-file edit.
 
 ## Dataset
 
-**Online Retail II**, UCI Machine Learning Repository, licensed CC BY 4.0.
-Source: https://archive.ics.uci.edu/dataset/502/online+retail+ii (see that page for
-the full citation). The raw file is **not** included in this repository.
+I used **Online Retail II** from the UCI Machine Learning Repository (CC BY 4.0), which
+covers a UK online gift retailer from December 2009 to December 2011.
+Source: https://archive.ics.uci.edu/dataset/502/online+retail+ii. The file isn't
+included here.
 
-Profile of the file as loaded by `scripts/prepare_online_retail.py`:
-
-| Measure | Value |
+| | |
 |---|---|
-| Rows read | 1,067,371 |
-| Rows dropped as unreadable | 0 |
+| Invoice lines | 1,067,371 |
 | Date range | 2009-12-01 to 2011-12-09 |
-| Rows without a customer ID | 22.8% |
-| Credit-note rows (invoice starts with "C") | 19,494 |
+| Lines with no customer ID | 22.8% |
+| Credit-note lines (returns) | 19,494 (1.8%) |
+
+It's a single flat table, with no status column and no refunds table, so most of the
+work was working out what each kind of line means.
+
+## Approach and Architecture
+
+```
+raw file -> staging -> intermediate -> marts
+            clean up     business        fct_orders
+            and          rules           fct_daily_revenue   <- reports read this
+            standardise  live here       fct_monthly_active_customers
+```
+
+Each layer does one job. All the business rules sit in two models
+(`int_order_totals` and `fct_orders`), so there's one place to look and one place to
+change. The final table has one row per day with orders, customers, gross revenue,
+refunds and net revenue.
+
+I also made the pipeline work with two sources through a single switch. One is the real
+retailer data. The other is a data generator I wrote that plants known flaws, which
+let me test the rules against answers I knew in advance. Everything after the staging
+layer is shared between them.
 
 ## Results
 
-### Real data (Online Retail II)
+### Total Revenue by Definition
 
-> run `make build test conflict SOURCE=online_retail_ii` 
+I totalled the same file three ways:
 
-| Definition | Revenue (GBP) |
+| Definition | Revenue (GBP) | vs governed |
+|---|---|---|
+| Add up every row | 19,287,251 | +1.9% |
+| Sales invoices only, every line, returns ignored | 20,813,918 | +10.0% |
+| **Governed: product lines only, duplicates removed, net of returns** | **18,925,714** | |
+
+### Revenue Bridge
+
+To see which rules do the work, I wrote a script that steps from the first total to the
+governed one a rule at a time, computed separately from the dbt models:
+
+| Step | Rows removed | Change (GBP) | Running total |
+|---|---|---|---|
+| Every row | | | 19,287,251 |
+| Remove exact duplicate lines | 34,337 | -432,269 | 18,854,982 |
+| Remove accounting adjustments (invoices starting "A") | 6 | +147,614 | 19,002,596 |
+| Remove non-product lines on sales invoices | 10,712 | -822,506 | 18,180,090 |
+| Remove non-product lines on credit notes | 1,190 | +745,625 | 18,925,714 |
+
+It ends exactly on the figure in the warehouse.
+
+### Key Findings
+
+- **The net difference hides large corrections.** Adding up everything is only 1.9% off
+  the governed number, but the individual rules move the total by about £2.15M in
+  gross terms. Errors in opposite directions cancel, so a sloppy method can look
+  accurate by luck.
+- **Six rows matter.** The accounting adjustments are just six lines and move the total by
+  £148K.
+- **Non-product lines are large on both sides.** Postage, fees and manual entries add
+  £0.82M of charges and £0.75M of credits, which net to about £77K. Excluding them
+  from both sides is consistent, but I haven't yet looked at what they actually are.
+
+## Business Rules and Assumptions
+
+These are my rules, not facts from the dataset. The full list is in
+[`docs/METRIC_RULES.md`](docs/METRIC_RULES.md).
+
+| Decision | Why |
 |---|---|
-| Naive A: sum of quantity x price over every row |      |
-| Naive B: sales invoices only, all lines, returns ignored |       |
-| **Governed**: product lines, deduplicated, net of credit notes |       |
+| Revenue counts only product lines: a 5-digit stock code and a price above zero | Postage, manual entries and bank charges aren't product sales |
+| Every invoice is treated as a completed sale | The data has no status column |
+| Credit notes reduce revenue on the day they're issued | They don't say which invoice they reverse |
+| Orders with no customer ID still count as revenue, but not as active customers | The money was real; I just can't attribute it to a person |
+| Exact duplicate lines count once | Likely ingestion repeats |
 
-- Spread between highest and lowest: _TODO_
-- dbt tests passed: _TODO_ / _TODO_
-- Findings and rule changes made after seeing the real data: _TODO_
+## Open Questions
 
-### Generated data (illustration)
+I treated the duplicates as errors on the strength of the dataset notes, not from checking
+them. If they're genuine repeat scans, revenue is about £0.43M (2.3%) higher. I also
+haven't broken the non-product lines down by stock code, so if some of them are customer
+discounts, excluding them overstates revenue. The reconciliation shows the code follows
+my rules. It doesn't show the rules are right.
 
-The generated data has known flaws, so it proves the rules work when the right
-answer is known. The three "team" queries are **simulated examples of common
-mistakes**, not real company code.
+## Testing and Validation
 
-| Definition | Revenue |
-|---|---|
-| Naive: all non-cancelled, no dedupe, no FX, includes shipping | £13.0M |
-| Naive: completed, deduplicated, no FX, ignores refunds | £11.4M |
-| **Governed**: GBP, net of refunds, excludes internal/test | **£9.9M** |
+- **26 dbt tests** run on every build: uniqueness, non-null keys, valid values,
+  relationships between tables, and custom checks that the daily table reconciles to the
+  orders table, no staff accounts appear in revenue, and a refund never exceeds what the
+  customer paid.
+- **A generated dataset with planted flaws** (duplicates, test orders, mixed currencies,
+  late refunds). One of the tests caught a real mistake in my first version: full refunds
+  ignored the discount, which made net revenue negative on 469 orders. I fixed it with an
+  explicit rule that a refund can't exceed the amount paid.
+- **A 13-row file in the real dataset's format**, with a credit note, a postage line, a
+  duplicate and an adjustment, where I worked out the correct answer by hand
+  (5 orders, £347.80 net). Writing it also exposed a bug in how I read Excel files with
+  differently named columns.
+- A GitHub Actions workflow runs the generated-data build and the 13-row check on every
+  push.
 
-A 31% spread, with all 26 dbt tests passing.
+On the real data the tests are mostly structural, since some can't fail by design. They
+catch regressions. The bridge is the more meaningful check.
 
-A test caught a real bug during the build: full refunds ignored the discount, so
-net revenue went negative on 469 orders. The fix is a stated rule, *a refund cannot
-exceed the amount paid*, capped in `int_order_totals`, with a
-`refund_exceeded_paid` flag so the upstream issue stays visible.
+## Usage
 
-## How it works
-
-```
-raw data ──► staging ──► intermediate ──► marts
-             (clean,      (business        dim_customers
-              dedupe,      rules, GBP,     fct_orders
-              one shape    refund cap)     fct_daily_revenue  ◄── dashboards read this
-              per source)                  fct_monthly_active_customers
-```
-
-Each layer has one job. Business rules live **once**, in `int_order_totals` and
-`fct_orders`, so changing a rule is a single edit. A source switch
-(`SOURCE=synthetic` or `SOURCE=online_retail_ii`) selects which staging logic runs;
-everything after staging is shared.
-
-The rules for each source are documented in [`docs/METRIC_RULES.md`](docs/METRIC_RULES.md).
-Key decisions:
-
-- Shipping and non-product lines (postage, manual entries, bank charges) are not revenue.
-- Credit notes reduce revenue on the day they are issued. The data does not say
-  which invoice each one reverses, so they are not linked to orders.
-- Orders with no customer ID still count as revenue but not as active customers.
-- Exact duplicate lines are removed.
-
-## Run it
-
-**Setup (once):**
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 make setup
-```
 
-**Generated data (no download):**
-```bash
-make all
-```
+make all                                   # generated data, end to end
 
-**Real data:**
-1. Download Online Retail II from the UCI page above and save it outside git
-   (this repo ignores `data/`).
-2. Standardise and build:
-```bash
+# real data: download Online Retail II from the link above first
 make prepare INPUT=path/to/online_retail_II.xlsx
 make build test conflict SOURCE=online_retail_ii
+python scripts/revenue_bridge.py           # step-by-step bridge
+
+make fixture                               # 13-row hand-checked test
 ```
 
-**Check the real-data code without downloading anything:**
-```bash
-make fixture
-```
-This runs the real-data path on a 13-row hand-made file whose correct answers were
-worked out by hand. CI runs it on every push.
+## Limitations and Future Work
 
-## Project structure
+It's a batch pipeline that runs on demand, which suits a question about agreed rules
+more than about speed. With more time I'd break down the non-product stock codes, test
+how sensitive the total is to the duplicate and discount assumptions, add a chart of
+the bridge, run it on a schedule with incremental models, and look at whether credit
+notes can be matched to their original invoices.
+
+## Repository Structure
 
 ```
-metric-truth/
-├── models/
-│   ├── staging/         clean-up, one file per table, handles both sources
-│   ├── intermediate/    business rules
-│   └── marts/           final tables
-├── macros/              reusable SQL for the real-data source
-├── tests/               custom reconciliation tests and the hand-checked fixture
-├── analyses/            naive-vs-governed comparison queries
-├── scripts/             data generator, real-data preparation, reports
-├── docs/METRIC_RULES.md the written metric definitions
-└── Makefile             one-word commands
+models/        staging, intermediate and mart layers
+macros/        reusable SQL for the real-data source
+tests/         custom reconciliation tests and the 13-row fixture
+analyses/      the naive-versus-governed comparison queries
+scripts/       data generator, file preparation, reports, revenue bridge
+docs/          written metric rules
 ```
 
-## Tests
-
-26 automated checks run on every build:
-
-- **Generic:** unique, not null, accepted values, relationships, non-negative.
-- **Custom reconciliation:** the daily table equals orders minus unlinked returns;
-  no internal customers in revenue; refunds never exceed the amount paid.
-
-## Limitations
-
-- **Batch, not real time.** It runs on demand, not as events arrive.
-- **Assumptions about the real data.** Every real invoice is treated as
-  `completed` because there is no status column, and credit notes are matched to
-  a day rather than to the invoice they reverse. See `docs/METRIC_RULES.md`.
-- **Static exchange rates** in the generated-data demo. Real FX would be daily and
-  joined on order date.
-- **Generated data is not a real business**, so its totals illustrate the method only.
-
-## At larger scale
-
-Incremental models partitioned by date, a scheduler (Airflow or Dagster),
-`dbt source freshness` checks, slim CI using `state:modified+`, a cloud warehouse
-such as BigQuery or Snowflake (an adapter swap), and the dbt Semantic Layer for
-metric definitions.
-
-## Credits
-
-Dataset: Online Retail II, UCI Machine Learning Repository (CC BY 4.0).
+Dataset: Online Retail II, UCI Machine Learning Repository, CC BY 4.0.
